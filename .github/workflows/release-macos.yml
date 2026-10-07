@@ -31,7 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          # The binaries need at least the runner's macOS (Homebrew bottles carry it as their
+          # minimum), so build on the oldest listed runner of each architecture.
+          - os: macos-14
             arch: arm64
           - os: macos-15-intel
             arch: x86_64
