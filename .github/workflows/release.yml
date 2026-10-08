@@ -1,11 +1,11 @@
-name: Release (macOS executables)
+name: Release (executables)
 
 # Builds relocatable BioSpring distributions (MDDriver + FreeSASA + OpenMP, all non-system
-# dylibs bundled) for Apple Silicon and Intel, and attaches them to the GitHub release on a
-# v* tag. The build logic lives in .github/scripts/release-macos.sh so it can be run
-# and debugged locally.
+# libraries bundled) for macOS (Apple Silicon, Intel) and Linux (x86_64, aarch64), and attaches
+# them to the GitHub release on a v* tag. The build logic lives in .github/scripts/release-macos.sh
+# and release-linux.sh so it can be run and debugged locally.
 #
-# Optional Developer ID signing and notarization run only if these repository secrets exist:
+# Optional macOS Developer ID signing and notarization run only if these repository secrets exist:
 #   MACOS_CERT_P12, MACOS_CERT_PASSWORD, MACOS_SIGN_IDENTITY   (Developer ID Application cert)
 #   NOTARY_KEY_P8, NOTARY_KEY_ID, NOTARY_ISSUER_ID             (App Store Connect API key)
 # Without them the binaries get an ad-hoc signature: they run, but a browser download is
@@ -17,15 +17,16 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - .github/workflows/release-macos.yml
+      - .github/workflows/release.yml
       - .github/scripts/release-macos.sh
+      - .github/scripts/release-linux.sh
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: ${{ matrix.arch }}
+  build-macos:
+    name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -92,10 +93,48 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc of the build machine is the minimum glibc of the result: build on the oldest
+          # listed Ubuntu runner of each architecture.
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-22.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake autoconf automake libtool pkg-config \
+            libnetcdf-dev libnetcdf-c++4-dev patchelf file
+
+      - name: Build, bundle and verify
+        run: .github/scripts/release-linux.sh
+
+      - name: Run in a bare container
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:22.04 sh -c \
+            'tar -xzf /dist/*.tar.gz -C /tmp && /tmp/biospring-*/bin/biospring --version'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: biospring-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Attach to release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
