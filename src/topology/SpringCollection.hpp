@@ -4,7 +4,9 @@
 #include "ParticleCollection.hpp"
 #include "Spring.hpp"
 
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility> // std::hash
 #include <vector>
 
@@ -105,9 +107,10 @@ class SpringCollection
     reference operator[](size_type pos) { return _data[pos]; }
     const_reference operator[](size_type pos) const { return _data[pos]; }
 
-    // Returns a reference to the spring with the given id.
-    reference at_uid(sid_t uid) { return _data[_by_uid.at(uid)]; }
-    const_reference at_uid(sid_t uid) const { return _data[_by_uid.at(uid)]; }
+    // Returns a reference to the spring with the given id (in either particle order).
+    // Throws std::out_of_range if the spring does not exist.
+    reference at_uid(sid_t uid) { return _data[_position(uid)]; }
+    const_reference at_uid(sid_t uid) const { return _data[_position(uid)]; }
 
     // Returns an iterator to the first particle in the collection.
     iterator begin() { return _data.begin(); }
@@ -199,6 +202,45 @@ class SpringCollection
         _by_uid.clear();
     }
 
+    // Removes the springs with the given ids (in either particle order).
+    // Ids that do not match any spring are ignored.
+    // Returns the number of springs removed.
+    size_t remove_springs(const std::vector<sid_t> & uids)
+    {
+        // Gets the positions of the springs to remove.
+        std::unordered_set<size_t> positions;
+        for (const sid_t & uid : uids)
+        {
+            auto it = _find(uid);
+            if (it != _by_uid.end())
+                positions.insert(it->second);
+        }
+
+        if (positions.empty())
+            return 0;
+
+        // Springs hold references to particles and cannot be assigned, so the
+        // vector is rebuilt instead of erasing elements in place.
+        std::vector<Spring> kept;
+        kept.reserve(_data.size() - positions.size());
+        _by_uid.clear();
+        for (size_t pos = 0; pos < _data.size(); ++pos)
+        {
+            if (positions.contains(pos))
+                continue;
+            kept.push_back(_data[pos]);
+            _by_uid[kept.back().uid()] = kept.size() - 1;
+        }
+        _data.swap(kept);
+
+        return positions.size();
+    }
+
+    // Removes the spring between two particles.
+    // Returns true if the spring existed.
+    bool remove_spring(pid_t uid1, pid_t uid2) { return remove_springs({{uid1, uid2}}) == 1; }
+    bool remove_spring(const Particle & p1, const Particle & p2) { return remove_spring(p1.unique_id(), p2.unique_id()); }
+
     // =============================================================================
     // Getters / Setters.
     // =============================================================================
@@ -231,6 +273,27 @@ class SpringCollection
     }
 
     bool exists(const Particle & p1, const Particle & p2) const { return exists(p1.unique_id(), p2.unique_id()); }
+
+  protected:
+    // Returns an iterator to the id map entry of the spring with the given id
+    // (in either particle order), or `_by_uid.end()` if the spring does not exist.
+    std::unordered_map<sid_t, size_t, sid_hash>::const_iterator _find(sid_t uid) const
+    {
+        auto it = _by_uid.find(uid);
+        if (it == _by_uid.end())
+            it = _by_uid.find({uid.second, uid.first});
+        return it;
+    }
+
+    // Returns the position of the spring with the given id (in either particle order).
+    // Throws std::out_of_range if the spring does not exist.
+    size_t _position(sid_t uid) const
+    {
+        auto it = _find(uid);
+        if (it == _by_uid.end())
+            throw std::out_of_range("Spring not found.");
+        return it->second;
+    }
 };
 
 } // namespace topology
